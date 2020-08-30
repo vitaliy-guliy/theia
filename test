@@ -1,0 +1,44 @@
+#!/bin/bash
+
+set -x
+
+DIR=$(pwd)
+mkdir -p "${DIR}"/formatter-test
+DIR="${DIR}"/formatter-test
+echo ${DIR}
+
+function prepare_plugins_dir() {
+    mkdir -p "${DIR}"/plugins
+    mkdir -p "${DIR}"/default-plugins
+    cd "${DIR}"/plugins
+    wget https://download.jboss.org/jbosstools/vscode/3rdparty/vscode-java-debug/vscode-java-debug-0.26.0.vsix
+    wget https://download.jboss.org/jbosstools/static/jdt.ls/stable/java-0.63.0-2222.vsix
+    wget https://download.jboss.org/jbosstools/vscode/stable/vscode-quarkus/vscode-quarkus-1.5.0-324.vsix
+}
+
+function prepare_workspace_dir() {
+    mkdir -p "${DIR}"/workspace
+    cd "${DIR}"/workspace
+    git clone https://github.com/spring-projects/spring-petclinic.git
+}
+
+function clone_build_theia() {
+    cd ${DIR}
+    git clone -b default-formatter-8354 --single-branch https://github.com/vitaliy-guliy/theia.git
+    cd theia
+
+    yarn
+}
+
+function run_theia() {
+    cd "${DIR}"/theia/examples/browser
+    export THEIA_DEFAULT_PLUGINS=local-dir://"${DIR}"/default-plugins
+    export THEIA_PLUGINS=local-dir://"${DIR}"/plugins
+    export
+    yarn run start "${DIR}"/workspace
+}
+
+prepare_plugins_dir
+prepare_workspace_dir
+clone_build_theia
+run_theia
