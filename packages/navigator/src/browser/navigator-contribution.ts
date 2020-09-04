@@ -28,7 +28,8 @@ import {
     PreferenceService,
     SelectableTreeNode,
     SHELL_TABBAR_CONTEXT_MENU,
-    Widget
+    Widget,
+    Title
 } from '@theia/core/lib/browser';
 import { FileDownloadCommands } from '@theia/filesystem/lib/browser/download/file-download-command-contribution';
 import {
@@ -62,7 +63,7 @@ import {
 import { FileSystemCommands } from '@theia/filesystem/lib/browser/filesystem-frontend-contribution';
 import { NavigatorDiff, NavigatorDiffCommands } from './navigator-diff';
 import { UriSelection } from '@theia/core/lib/common/selection';
-import { DirNode } from '@theia/filesystem/lib/browser';
+import { DirNode, FileNode } from '@theia/filesystem/lib/browser';
 import { FileNavigatorModel } from './navigator-model';
 import { ClipboardService } from '@theia/core/lib/browser/clipboard-service';
 import { SelectionService } from '@theia/core/lib/common/selection-service';
@@ -105,6 +106,11 @@ export namespace FileNavigatorCommands {
     };
     export const COPY_RELATIVE_FILE_PATH: Command = {
         id: 'navigator.copyRelativeFilePath'
+    };
+    export const OPEN: Command = {
+        id: 'navigator.open',
+        category: 'File',
+        label: 'Open'
     };
 }
 
@@ -255,9 +261,18 @@ export class FileNavigatorContribution extends AbstractViewContribution<FileNavi
             execute: () => this.openView({ activate: true })
         });
         registry.registerCommand(FileNavigatorCommands.REVEAL_IN_NAVIGATOR, {
-            execute: () => this.openView({ activate: true }).then(() => this.selectWidgetFileNode(this.shell.currentWidget)),
-            isEnabled: () => Navigatable.is(this.shell.currentWidget),
-            isVisible: () => Navigatable.is(this.shell.currentWidget)
+            execute: (event?: Event) => {
+                const widget = this.findTargetedWidget(event);
+                this.openView({ activate: true }).then(() => this.selectWidgetFileNode(widget || this.shell.currentWidget));
+            },
+            isEnabled: (event?: Event) => {
+                const widget = this.findTargetedWidget(event);
+                return widget ? Navigatable.is(widget) : Navigatable.is(this.shell.currentWidget);
+            },
+            isVisible: (event?: Event) => {
+                const widget = this.findTargetedWidget(event);
+                return widget ? Navigatable.is(widget) : Navigatable.is(this.shell.currentWidget);
+            }
         });
         registry.registerCommand(FileNavigatorCommands.TOGGLE_HIDDEN_FILES, {
             execute: () => {
@@ -330,6 +345,20 @@ export class FileNavigatorContribution extends AbstractViewContribution<FileNavi
                 await this.clipboardService.writeText(text);
             }
         }, { multi: true }));
+        registry.registerCommand(FileNavigatorCommands.OPEN, {
+            isEnabled: () => this.getSelectedFileNodes().length > 0,
+            isVisible: () => this.getSelectedFileNodes().length > 0,
+            execute: () => {
+                this.getSelectedFileNodes().forEach(async node => {
+                    const opener = await this.openerService.getOpener(node.uri);
+                    opener.open(node.uri);
+                });
+            }
+        });
+    }
+
+    protected getSelectedFileNodes(): FileNode[] {
+        return this.tryGetWidget()?.model.selectedNodes.filter(FileNode.is) || [];
     }
 
     protected withWidget<T>(widget: Widget | undefined = this.tryGetWidget(), cb: (navigator: FileNavigatorWidget) => T): T | false {
@@ -348,7 +377,8 @@ export class FileNavigatorContribution extends AbstractViewContribution<FileNavi
         });
 
         registry.registerMenuAction(NavigatorContextMenu.NAVIGATION, {
-            commandId: CommonCommands.OPEN.id
+            commandId: FileNavigatorCommands.OPEN.id,
+            label: 'Open'
         });
         registry.registerSubmenu(NavigatorContextMenu.OPEN_WITH, 'Open With');
         this.openerService.getOpeners().then(openers => {
@@ -524,6 +554,19 @@ export class FileNavigatorContribution extends AbstractViewContribution<FileNavi
         item.command = id;
         this.tabbarToolbarRegistry.registerItem(item);
     };
+
+    /**
+     * Find the selected widget.
+     * @returns `widget` of the respective `title` if it exists, else returns undefined.
+     */
+    private findTargetedWidget(event?: Event): Widget | undefined {
+        let title: Title<Widget> | undefined;
+        if (event) {
+            const tab = this.shell.findTabBar(event);
+            title = tab && this.shell.findTitle(tab, event);
+        }
+        return title && title.owner;
+    }
 
     /**
      * Reveals and selects node in the file navigator to which given widget is related.

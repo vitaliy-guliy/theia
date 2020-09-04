@@ -361,4 +361,37 @@ declare module '@theia/plugin' {
         limitHit?: boolean;
     }
     //#endregion
+
+    //#region read/write in chunks: https://github.com/microsoft/vscode/issues/84515
+
+    export interface FileSystemProvider {
+        open?(resource: Uri, options: { create: boolean; }): number | Thenable<number>;
+        close?(fd: number): void | Thenable<void>;
+        read?(fd: number, pos: number, data: Uint8Array, offset: number, length: number): number | Thenable<number>;
+        write?(fd: number, pos: number, data: Uint8Array, offset: number, length: number): number | Thenable<number>;
+    }
+
+    //#endregion
+
+
+    export interface ResourceLabelFormatter {
+        scheme: string;
+        authority?: string;
+        formatting: ResourceLabelFormatting;
+    }
+
+    export interface ResourceLabelFormatting {
+        label: string; // myLabel:/${path}
+        // TODO@isi
+        // eslint-disable-next-line vscode-dts-literal-or-types
+        separator: '/' | '\\' | '';
+        tildify?: boolean;
+        normalizeDriveLetter?: boolean;
+        workspaceSuffix?: string;
+        authorityPrefix?: string;
+    }
+
+    export namespace workspace {
+        export function registerResourceLabelFormatter(formatter: ResourceLabelFormatter): Disposable;
+    }
 }

@@ -81,7 +81,8 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
         'workspaceContains',
         'onView',
         'onUri',
-        'onWebviewPanel'
+        'onWebviewPanel',
+        'onFileSystem'
     ]);
 
     private configStorage: ConfigStorage | undefined;
@@ -244,15 +245,12 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
             const unsupportedActivationEvents = plugin.rawModel.activationEvents.filter(e => !PluginManagerExtImpl.SUPPORTED_ACTIVATION_EVENTS.has(e.split(':')[0]));
             if (unsupportedActivationEvents.length) {
                 console.warn(`Unsupported activation events: ${unsupportedActivationEvents.join(', ')}, please open an issue: https://github.com/eclipse-theia/theia/issues/new`);
-                console.warn(`${plugin.model.id} extension will be activated eagerly.`);
-                this.setActivation('*', activation);
-            } else {
-                for (let activationEvent of plugin.rawModel.activationEvents) {
-                    if (activationEvent === 'onUri') {
-                        activationEvent = `onUri:theia://${plugin.model.id}`;
-                    }
-                    this.setActivation(activationEvent, activation);
+            }
+            for (let activationEvent of plugin.rawModel.activationEvents) {
+                if (activationEvent === 'onUri') {
+                    activationEvent = `onUri:theia://${plugin.model.id}`;
                 }
+                this.setActivation(activationEvent, activation);
             }
         }
     }
@@ -300,9 +298,9 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
                     if (this.pluginActivationPromises.has(plugin.model.id)) {
                         this.pluginActivationPromises.get(plugin.model.id)!.reject(err);
                     }
-                    const message = `Activating extension '${plugin.model.displayName || plugin.model.name}' failed: ${err.message}`;
-                    this.messageRegistryProxy.$showMessage(MainMessageType.Error, message, {}, []);
-                    console.error(message);
+                    const message = `Activating extension '${plugin.model.displayName || plugin.model.name}' failed:`;
+                    this.messageRegistryProxy.$showMessage(MainMessageType.Error, message + ' ' + err.message, {}, []);
+                    console.error(message, err);
                     return false;
                 } finally {
                     this.notificationMain.$stopProgress(progressId);

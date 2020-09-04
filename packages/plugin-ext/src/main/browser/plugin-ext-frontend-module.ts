@@ -47,7 +47,6 @@ import { PluginDebugSessionContributionRegistry } from './debug/plugin-debug-ses
 import { PluginDebugService } from './debug/plugin-debug-service';
 import { DebugService } from '@theia/debug/lib/common/debug-service';
 import { PluginSharedStyle } from './plugin-shared-style';
-import { FSResourceResolver } from './file-system-main';
 import { SelectionProviderCommandContribution } from './selection-provider-command';
 import { ViewColumnService } from './view-column-service';
 import { ViewContextKeyService } from './view/view-context-key-service';
@@ -57,12 +56,10 @@ import { RPCProtocol } from '../../common/rpc-protocol';
 import { LanguagesMainFactory, OutputChannelRegistryFactory } from '../../common';
 import { LanguagesMainImpl } from './languages-main';
 import { OutputChannelRegistryMainImpl } from './output-channel-registry-main';
-import { InPluginFileSystemWatcherManager } from './in-plugin-filesystem-watcher-manager';
 import { WebviewWidget } from './webview/webview';
 import { WebviewEnvironment } from './webview/webview-environment';
 import { WebviewThemeDataProvider } from './webview/webview-theme-data-provider';
 import { bindWebviewPreferences } from './webview/webview-preferences';
-import { WebviewResourceLoader, WebviewResourceLoaderPath } from '../common/webview-protocol';
 import { WebviewResourceCache } from './webview/webview-resource-cache';
 import { PluginIconThemeService, PluginIconThemeFactory, PluginIconThemeDefinition, PluginIconTheme } from './plugin-icon-theme-service';
 import { PluginTreeViewNodeLabelProvider } from './view/plugin-tree-view-node-label-provider';
@@ -154,9 +151,6 @@ export default new ContainerModule((bind, unbind, isBound, rebind) => {
     bindWebviewPreferences(bind);
     bind(WebviewEnvironment).toSelf().inSingletonScope();
     bind(WebviewThemeDataProvider).toSelf().inSingletonScope();
-    bind(WebviewResourceLoader).toDynamicValue(ctx =>
-        WebSocketConnectionProvider.createProxy(ctx.container, WebviewResourceLoaderPath)
-    ).inSingletonScope();
     bind(WebviewResourceCache).toSelf().inSingletonScope();
     bind(WebviewWidget).toSelf();
     bind(WebviewWidgetFactory).toDynamicValue(ctx => new WebviewWidgetFactory(ctx.container)).inSingletonScope();
@@ -194,11 +188,8 @@ export default new ContainerModule((bind, unbind, isBound, rebind) => {
     bind(KeybindingsContributionPointHandler).toSelf().inSingletonScope();
     bind(PluginContributionHandler).toSelf().inSingletonScope();
 
-    bind(InPluginFileSystemWatcherManager).toSelf().inSingletonScope();
     bind(TextContentResourceResolver).toSelf().inSingletonScope();
     bind(ResourceResolver).toService(TextContentResourceResolver);
-    bind(FSResourceResolver).toSelf().inSingletonScope();
-    bind(ResourceResolver).toService(FSResourceResolver);
     bindContributionProvider(bind, MainPluginApiProvider);
 
     bind(PluginDebugService).toSelf().inSingletonScope();

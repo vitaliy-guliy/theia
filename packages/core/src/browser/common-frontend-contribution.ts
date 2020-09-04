@@ -17,11 +17,11 @@
 /* eslint-disable max-len, @typescript-eslint/indent */
 
 import debounce = require('lodash.debounce');
-import { injectable, inject, postConstruct } from 'inversify';
-import { TabBar, Widget, Title } from '@phosphor/widgets';
-import { MAIN_MENU_BAR, MenuContribution, MenuModelRegistry } from '../common/menu';
+import { injectable, inject } from 'inversify';
+import { TabBar, Widget } from '@phosphor/widgets';
+import { MAIN_MENU_BAR, SETTINGS_MENU, MenuContribution, MenuModelRegistry } from '../common/menu';
 import { KeybindingContribution, KeybindingRegistry } from './keybinding';
-import { FrontendApplicationContribution } from './frontend-application';
+import { FrontendApplication, FrontendApplicationContribution } from './frontend-application';
 import { CommandContribution, CommandRegistry, Command } from '../common/command';
 import { UriAwareCommandHandler } from '../common/uri-command-handler';
 import { SelectionService } from '../common/selection-service';
@@ -48,6 +48,9 @@ import { CorePreferences } from './core-preferences';
 import { ThemeService } from './theming';
 import { PreferenceService, PreferenceScope } from './preferences';
 import { ClipboardService } from './clipboard-service';
+import { EncodingRegistry } from './encoding-registry';
+import { UTF8 } from '../common/encodings';
+import { EnvVariablesServer } from '../common/env-variables';
 
 export namespace CommonMenus {
 
@@ -73,6 +76,9 @@ export namespace CommonMenus {
     export const VIEW_LAYOUT = [...VIEW, '2_layout'];
     export const VIEW_TOGGLE = [...VIEW, '3_toggle'];
 
+    export const SETTINGS_OPEN = [...SETTINGS_MENU, '1_settings_open'];
+    export const SETTINGS__THEME = [...SETTINGS_MENU, '2_settings_theme'];
+
     // last menu item
     export const HELP = [...MAIN_MENU_BAR, '9_help'];
 
@@ -85,8 +91,6 @@ export namespace CommonCommands {
 
     export const OPEN: Command = {
         id: 'core.open',
-        category: FILE_CATEGORY,
-        label: 'Open',
     };
 
     export const CUT: Command = {
@@ -317,8 +321,20 @@ export class CommonFrontendContribution implements FrontendApplicationContributi
     @inject(ClipboardService)
     protected readonly clipboardService: ClipboardService;
 
-    @postConstruct()
-    protected init(): void {
+    @inject(EncodingRegistry)
+    protected readonly encodingRegistry: EncodingRegistry;
+
+    @inject(EnvVariablesServer)
+    protected readonly environments: EnvVariablesServer;
+
+    async configure(app: FrontendApplication): Promise<void> {
+        const configDirUri = await this.environments.getConfigDirUri();
+        // Global settings
+        this.encodingRegistry.registerOverride({
+            encoding: UTF8,
+            parent: new URI(configDirUri)
+        });
+
         this.contextKeyService.createKey<boolean>('isLinux', OS.type() === OS.Type.Linux);
         this.contextKeyService.createKey<boolean>('isMac', OS.type() === OS.Type.OSX);
         this.contextKeyService.createKey<boolean>('isWindows', OS.type() === OS.Type.Windows);
@@ -338,6 +354,14 @@ export class CommonFrontendContribution implements FrontendApplicationContributi
         });
         this.themeService.onThemeChange(() => this.updateThemePreference('workbench.colorTheme'));
         this.iconThemes.onDidChangeCurrent(() => this.updateThemePreference('workbench.iconTheme'));
+
+        app.shell.leftPanelHandler.addMenu({
+            id: 'settings-menu',
+            iconClass: 'codicon codicon-settings-gear',
+            title: 'Settings',
+            menuPath: SETTINGS_MENU,
+            order: 0,
+        });
     }
 
     protected updateStyles(): void {
@@ -348,7 +372,7 @@ export class CommonFrontendContribution implements FrontendApplicationContributi
     }
 
     protected updateThemePreference(preferenceName: 'workbench.colorTheme' | 'workbench.iconTheme'): void {
-        const inspect = this.preferenceService.inspect<string>(preferenceName);
+        const inspect = this.preferenceService.inspect<string | null>(preferenceName);
         const workspaceValue = inspect && inspect.workspaceValue;
         const userValue = inspect && inspect.globalValue;
         const value = workspaceValue || userValue;
@@ -360,16 +384,15 @@ export class CommonFrontendContribution implements FrontendApplicationContributi
     }
 
     protected updateThemeFromPreference(preferenceName: 'workbench.colorTheme' | 'workbench.iconTheme'): void {
-        const value = this.preferences[preferenceName];
+        const inspect = this.preferenceService.inspect<string | null>(preferenceName);
+        const workspaceValue = inspect && inspect.workspaceValue;
+        const userValue = inspect && inspect.globalValue;
+        const value = workspaceValue || userValue;
         if (value !== undefined) {
             if (preferenceName === 'workbench.colorTheme') {
-                if (!value) {
-                    this.themeService.reset();
-                } else {
-                    this.themeService.setCurrentTheme(value);
-                }
+                this.themeService.setCurrentTheme(value || this.themeService.defaultTheme.id);
             } else {
-                this.iconThemes.current = value || 'none';
+                this.iconThemes.current = value || this.iconThemes.default.id;
             }
         }
     }
@@ -503,6 +526,13 @@ export class CommonFrontendContribution implements FrontendApplicationContributi
         registry.registerMenuAction(CommonMenus.FILE_SETTINGS_SUBMENU_THEME, {
             commandId: CommonCommands.SELECT_ICON_THEME.id
         });
+
+        registry.registerMenuAction(CommonMenus.SETTINGS__THEME, {
+            commandId: CommonCommands.SELECT_COLOR_THEME.id
+        });
+        registry.registerMenuAction(CommonMenus.SETTINGS__THEME, {
+            commandId: CommonCommands.SELECT_ICON_THEME.id
+        });
     }
 
     registerCommands(commandRegistry: CommandRegistry): void {
@@ -591,55 +621,59 @@ export class CommonFrontendContribution implements FrontendApplicationContributi
         });
         commandRegistry.registerCommand(CommonCommands.CLOSE_TAB, {
             isEnabled: (event?: Event) => {
-                const tabBar = this.findTabBar(event);
+                const tabBar = this.shell.findTabBar(event);
                 if (!tabBar) {
                     return false;
                 }
-                const currentTitle = this.findTitle(tabBar, event);
+                const currentTitle = this.shell.findTitle(tabBar, event);
                 return currentTitle !== undefined && currentTitle.closable;
             },
             execute: (event?: Event) => {
-                const tabBar = this.findTabBar(event)!;
-                const currentTitle = this.findTitle(tabBar, event);
+                const tabBar = this.shell.findTabBar(event)!;
+                const currentTitle = this.shell.findTitle(tabBar, event);
                 this.shell.closeTabs(tabBar, title => title === currentTitle);
             }
         });
         commandRegistry.registerCommand(CommonCommands.CLOSE_OTHER_TABS, {
             isEnabled: (event?: Event) => {
-                const tabBar = this.findTabBar(event);
+                const tabBar = this.shell.findTabBar(event);
                 if (!tabBar) {
                     return false;
                 }
-                const currentTitle = this.findTitle(tabBar, event);
+                const currentTitle = this.shell.findTitle(tabBar, event);
                 return tabBar.titles.some(title => title !== currentTitle && title.closable);
             },
             execute: (event?: Event) => {
-                const tabBar = this.findTabBar(event)!;
-                const currentTitle = this.findTitle(tabBar, event);
+                const tabBar = this.shell.findTabBar(event)!;
+                const currentTitle = this.shell.findTitle(tabBar, event);
                 this.shell.closeTabs(tabBar, title => title !== currentTitle && title.closable);
             }
         });
         commandRegistry.registerCommand(CommonCommands.CLOSE_RIGHT_TABS, {
             isEnabled: (event?: Event) => {
-                const tabBar = this.findTabBar(event);
-                return tabBar !== undefined && tabBar.titles.some((title, index) => index > tabBar.currentIndex && title.closable);
+                const tabBar = this.shell.findTabBar(event);
+                if (!tabBar) {
+                    return false;
+                }
+                const currentIndex = this.findTitleIndex(tabBar, event);
+                return tabBar.titles.some((title, index) => index > currentIndex && title.closable);
             },
             isVisible: (event?: Event) => {
                 const area = this.findTabArea(event);
                 return area !== undefined && area !== 'left' && area !== 'right';
             },
             execute: (event?: Event) => {
-                const tabBar = this.findTabBar(event)!;
-                const currentIndex = tabBar.currentIndex;
+                const tabBar = this.shell.findTabBar(event)!;
+                const currentIndex = this.findTitleIndex(tabBar, event);
                 this.shell.closeTabs(tabBar, (title, index) => index > currentIndex && title.closable);
             }
         });
         commandRegistry.registerCommand(CommonCommands.CLOSE_ALL_TABS, {
             isEnabled: (event?: Event) => {
-                const tabBar = this.findTabBar(event);
+                const tabBar = this.shell.findTabBar(event);
                 return tabBar !== undefined && tabBar.titles.some(title => title.closable);
             },
-            execute: (event?: Event) => this.shell.closeTabs(this.findTabBar(event)!, title => title.closable)
+            execute: (event?: Event) => this.shell.closeTabs(this.shell.findTabBar(event)!, title => title.closable)
         });
         commandRegistry.registerCommand(CommonCommands.CLOSE_MAIN_TAB, {
             isEnabled: () => {
@@ -686,9 +720,9 @@ export class CommonFrontendContribution implements FrontendApplicationContributi
             }
         });
         commandRegistry.registerCommand(CommonCommands.TOGGLE_MAXIMIZED, {
-            isEnabled: () => this.shell.canToggleMaximized(),
-            isVisible: () => this.shell.canToggleMaximized(),
-            execute: () => this.shell.toggleMaximized()
+            isEnabled: (event?: Event) => this.canToggleMaximized(event),
+            isVisible: (event?: Event) => this.canToggleMaximized(event),
+            execute: (event?: Event) => this.toggleMaximized(event)
         });
 
         commandRegistry.registerCommand(CommonCommands.SAVE, {
@@ -713,38 +747,61 @@ export class CommonFrontendContribution implements FrontendApplicationContributi
         });
     }
 
-    private findTabBar(event?: Event): TabBar<Widget> | undefined {
-        if (event && event.target) {
-            const tabBar = this.shell.findWidgetForElement(event.target as HTMLElement);
-            if (tabBar instanceof TabBar) {
-                return tabBar;
-            }
-        }
-        return this.shell.currentTabBar;
-    }
-
     private findTabArea(event?: Event): ApplicationShell.Area | undefined {
-        const tabBar = this.findTabBar(event);
+        const tabBar = this.shell.findTabBar(event);
         if (tabBar) {
             return this.shell.getAreaFor(tabBar);
         }
         return this.shell.currentTabArea;
     }
 
-    private findTitle(tabBar: TabBar<Widget>, event?: Event): Title<Widget> | undefined {
-        if (event && event.target) {
-            let tabNode: HTMLElement | null = event.target as HTMLElement;
-            while (tabNode && !tabNode.classList.contains('p-TabBar-tab')) {
-                tabNode = tabNode.parentElement;
-            }
-            if (tabNode && tabNode.title) {
-                const title = tabBar.titles.find(t => t.label === tabNode!.title);
-                if (title) {
-                    return title;
-                }
+    /**
+     * Finds the index of the selected title from the tab-bar.
+     * @param tabBar: used for providing an array of titles.
+     * @returns the index of the selected title if it is available in the tab-bar, else returns the index of currently-selected title.
+     */
+    private findTitleIndex(tabBar: TabBar<Widget>, event?: Event): number {
+        if (event) {
+            const targetTitle = this.shell.findTitle(tabBar, event);
+            return targetTitle ? tabBar.titles.indexOf(targetTitle) : tabBar.currentIndex;
+        }
+        return tabBar.currentIndex;
+    }
+
+    private canToggleMaximized(event?: Event): boolean {
+        if (event?.target instanceof HTMLElement) {
+            const widget = this.shell.findWidgetForElement(event.target);
+            if (widget) {
+                return this.shell.mainPanel.contains(widget) || this.shell.bottomPanel.contains(widget);
             }
         }
-        return tabBar.currentTitle || undefined;
+        return this.shell.canToggleMaximized();
+    }
+
+    /**
+     * Maximize the bottom or the main dockpanel based on the widget.
+     * @param event used to find the selected widget.
+     */
+    private toggleMaximized(event?: Event): void {
+        if (event?.target instanceof HTMLElement) {
+            const widget = this.shell.findWidgetForElement(event.target);
+            if (widget) {
+                if (this.shell.mainPanel.contains(widget)) {
+                    this.shell.mainPanel.toggleMaximized();
+                } else if (this.shell.bottomPanel.contains(widget)) {
+                    this.shell.bottomPanel.toggleMaximized();
+                }
+                if (widget instanceof TabBar) {
+                    // reveals the widget when maximized.
+                    const title = this.shell.findTitle(widget, event);
+                    if (title) {
+                        this.shell.revealWidget(title.owner.id);
+                    }
+                }
+            }
+        } else {
+            this.shell.toggleMaximized();
+        }
     }
 
     private isElectron(): boolean {
@@ -925,16 +982,16 @@ export class CommonFrontendContribution implements FrontendApplicationContributi
         this.quickOpenService.open({
             onType: (_, accept) => accept(items)
         }, {
-                placeholder: 'Select File Icon Theme',
-                fuzzyMatchLabel: true,
-                selectIndex: () => items.findIndex(item => item.id === this.iconThemes.current),
-                onClose: () => {
-                    if (resetTo) {
-                        previewTheme.cancel();
-                        this.iconThemes.current = resetTo;
-                    }
+            placeholder: 'Select File Icon Theme',
+            fuzzyMatchLabel: true,
+            selectIndex: () => items.findIndex(item => item.id === this.iconThemes.current),
+            onClose: () => {
+                if (resetTo) {
+                    previewTheme.cancel();
+                    this.iconThemes.current = resetTo;
                 }
-            });
+            }
+        });
     }
 
     protected selectColorTheme(): void {
@@ -964,19 +1021,19 @@ export class CommonFrontendContribution implements FrontendApplicationContributi
         this.quickOpenService.open({
             onType: (_, accept) => accept(items)
         }, {
-                placeholder: 'Select Color Theme (Up/Down Keys to Preview)',
-                fuzzyMatchLabel: true,
-                selectIndex: () => {
-                    const current = this.themeService.getCurrentTheme().id;
-                    return items.findIndex(item => item.id === current);
-                },
-                onClose: () => {
-                    if (resetTo) {
-                        previewTheme.cancel();
-                        this.themeService.setCurrentTheme(resetTo);
-                    }
+            placeholder: 'Select Color Theme (Up/Down Keys to Preview)',
+            fuzzyMatchLabel: true,
+            selectIndex: () => {
+                const current = this.themeService.getCurrentTheme().id;
+                return items.findIndex(item => item.id === current);
+            },
+            onClose: () => {
+                if (resetTo) {
+                    previewTheme.cancel();
+                    this.themeService.setCurrentTheme(resetTo);
                 }
-            });
+            }
+        });
     }
 
     registerColors(colors: ColorRegistry): void {
@@ -1077,7 +1134,7 @@ export class CommonFrontendContribution implements FrontendApplicationContributi
             // if not yet contributed by Monaco, check runtime css variables to learn.
             // TODO: Following are not yet supported/no respective elements in theia:
             // list.focusBackground, list.focusForeground, list.inactiveFocusBackground, list.filterMatchBorder,
-            // list.dropBackground, listFilterWidget.outline, listFilterWidget.noMatchesOutline, tree.indentGuidesStroke
+            // list.dropBackground, listFilterWidget.outline, listFilterWidget.noMatchesOutline
             // list.invalidItemForeground,
             // list.warningForeground, list.errorForeground => tree node needs an respective class
             { id: 'list.activeSelectionBackground', defaults: { dark: '#094771', light: '#0074E8' }, description: 'List/Tree background color for the selected item when the list/tree is active. An active list/tree has keyboard focus, an inactive does not.' },
@@ -1087,6 +1144,7 @@ export class CommonFrontendContribution implements FrontendApplicationContributi
             { id: 'list.hoverBackground', defaults: { dark: '#2A2D2E', light: '#F0F0F0' }, description: 'List/Tree background when hovering over items using the mouse.' },
             { id: 'list.hoverForeground', description: 'List/Tree foreground when hovering over items using the mouse.' },
             { id: 'list.filterMatchBackground', defaults: { dark: 'editor.findMatchHighlightBackground', light: 'editor.findMatchHighlightBackground' }, description: 'Background color of the filtered match.' },
+            { id: 'tree.inactiveIndentGuidesStroke', defaults: { dark: Color.transparent('tree.indentGuidesStroke', 0.4), light: Color.transparent('tree.indentGuidesStroke', 0.4), hc: Color.transparent('tree.indentGuidesStroke', 0.4) }, description: 'Tree stroke color for the inactive indentation guides.' },
 
             // Editor Group & Tabs colors should be aligned with https://code.visualstudio.com/api/references/theme-color#editor-groups-tabs
             {

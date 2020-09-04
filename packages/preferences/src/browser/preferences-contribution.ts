@@ -30,24 +30,23 @@ import {
 import { isFirefox } from '@theia/core/lib/browser';
 import { isOSX } from '@theia/core/lib/common/os';
 import { TabBarToolbarRegistry } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
-import { FileSystem } from '@theia/filesystem/lib/common';
 import { EditorManager, EditorWidget } from '@theia/editor/lib/browser';
 import URI from '@theia/core/lib/common/uri';
 import { PreferencesWidget } from './views/preference-widget';
 import { PreferencesEventService } from './util/preference-event-service';
 import { WorkspacePreferenceProvider } from './workspace-preference-provider';
-import { USER_PREFERENCE_URI } from './user-preference-provider';
 import { Preference, PreferencesCommands, PreferenceMenus } from './util/preference-types';
 import { ClipboardService } from '@theia/core/lib/browser/clipboard-service';
+import { FileService } from '@theia/filesystem/lib/browser/file-service';
 
 @injectable()
 export class PreferencesContribution extends AbstractViewContribution<PreferencesWidget> {
 
     @inject(PreferencesEventService) protected readonly preferencesEventService: PreferencesEventService;
-    @inject(FileSystem) protected readonly filesystem: FileSystem;
+    @inject(FileService) protected readonly fileService: FileService;
     @inject(PreferenceProvider) @named(PreferenceScope.Workspace) protected readonly workspacePreferenceProvider: WorkspacePreferenceProvider;
     @inject(EditorManager) protected readonly editorManager: EditorManager;
-    @inject(PreferenceService) protected readonly preferenceValueRetrievalService: PreferenceService;
+    @inject(PreferenceService) protected readonly preferenceService: PreferenceService;
     @inject(ClipboardService) protected readonly clipboardService: ClipboardService;
 
     protected preferencesScope = Preference.DEFAULT_SCOPE;
@@ -101,13 +100,18 @@ export class PreferencesContribution extends AbstractViewContribution<Preference
             isEnabled: Preference.EditorCommandArgs.is,
             isVisible: Preference.EditorCommandArgs.is,
             execute: ({ id, value }: Preference.EditorCommandArgs) => {
-                this.preferenceValueRetrievalService.set(id, undefined, Number(this.preferencesScope.scope), this.preferencesScope.uri);
+                this.preferenceService.set(id, undefined, Number(this.preferencesScope.scope), this.preferencesScope.uri);
             }
         });
     }
 
     registerMenus(menus: MenuModelRegistry): void {
         menus.registerMenuAction(CommonMenus.FILE_SETTINGS_SUBMENU_OPEN, {
+            commandId: CommonCommands.OPEN_PREFERENCES.id,
+            label: CommonCommands.OPEN_PREFERENCES.label,
+            order: 'a10',
+        });
+        menus.registerMenuAction(CommonMenus.SETTINGS_OPEN, {
             commandId: CommonCommands.OPEN_PREFERENCES.id,
             label: CommonCommands.OPEN_PREFERENCES.label,
             order: 'a10',
@@ -154,11 +158,11 @@ export class PreferencesContribution extends AbstractViewContribution<Preference
             const currentPreferenceValue = preferenceNode.preference.values!;
             const key = Preference.LookupKeys[Number(scope)] as keyof Preference.ValuesInAllScopes;
             const valueInCurrentScope = currentPreferenceValue[key] === undefined ? currentPreferenceValue.defaultValue : currentPreferenceValue[key] as PreferenceItem;
-            this.preferenceValueRetrievalService.set(preferenceId, valueInCurrentScope, Number(scope), uri);
+            this.preferenceService.set(preferenceId, valueInCurrentScope, Number(scope), uri);
         }
 
         let jsonEditorWidget: EditorWidget;
-        const jsonUriToOpen = await this.getPreferencesJSONUri(scope, activeScopeIsFolder, uri);
+        const jsonUriToOpen = await this.obtainConfigUri(scope, activeScopeIsFolder, uri);
         if (jsonUriToOpen) {
             jsonEditorWidget = await this.editorManager.open(jsonUriToOpen);
 
@@ -173,36 +177,20 @@ export class PreferencesContribution extends AbstractViewContribution<Preference
         }
     }
 
-    private async getPreferencesJSONUri(scope: string, activeScopeIsFolder: string, uri: string): Promise<URI | undefined> {
-        const scopeNumber = Number(scope);
-        if (PreferenceScope.User === scopeNumber) {
-            return USER_PREFERENCE_URI;
-        } else if (PreferenceScope.Workspace === scopeNumber) {
-            if (activeScopeIsFolder === 'true') {
-                return this.getOrCreateSettingsFile(uri);
-            } else {
-                const wsURI = this.workspacePreferenceProvider.getConfigUri();
-                if (wsURI) {
-                    const wsURIString = wsURI.toString();
-                    if (!await this.filesystem.exists(wsURIString)) {
-                        await this.filesystem.createFile(wsURIString);
-                    }
-                    return new URI(wsURIString);
-                }
-            }
-
-        } else if (PreferenceScope.Folder === scopeNumber) {
-            return this.getOrCreateSettingsFile(uri);
+    private async obtainConfigUri(serializedScope: string, activeScopeIsFolder: string, resource: string): Promise<URI | undefined> {
+        let scope: PreferenceScope = Number(serializedScope);
+        if (activeScopeIsFolder === 'true') {
+            scope = PreferenceScope.Folder;
         }
-        return undefined;
-    }
-
-    protected async getOrCreateSettingsFile(folderURI: string): Promise<URI> {
-        const folderSettingsURI = `${folderURI}/.theia/settings.json`;
-        if (folderSettingsURI && !await this.filesystem.exists(folderSettingsURI)) {
-            await this.filesystem.createFile(folderSettingsURI);
+        const resourceUri = !!resource ? resource : undefined;
+        const configUri = this.preferenceService.getConfigUri(scope, resourceUri);
+        if (!configUri) {
+            return undefined;
         }
-        return new URI(folderSettingsURI);
+        if (configUri && !await this.fileService.exists(configUri)) {
+            await this.fileService.create(configUri);
+        }
+        return configUri;
     }
 
     /**
